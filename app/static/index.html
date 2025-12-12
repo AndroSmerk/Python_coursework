@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>JWT Items Demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2rem auto;
+        max-width: 720px;
+        line-height: 1.5;
+      }
+      section {
+        border: 1px solid #ddd;
+        padding: 1rem;
+        margin-bottom: 1.5rem;
+        border-radius: 8px;
+      }
+      label {
+        display: block;
+        margin-bottom: 0.25rem;
+      }
+      input,
+      textarea {
+        width: 100%;
+        padding: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      button {
+        padding: 0.5rem 1rem;
+        cursor: pointer;
+      }
+      ul {
+        padding-left: 1.25rem;
+      }
+      .status {
+        font-size: 0.9rem;
+        color: #555;
+      }
+      .completed {
+        text-decoration: line-through;
+        color: green;
+      }
+      .actions {
+        margin-top: 0.5rem;
+      }
+      .actions button {
+        margin-right: 0.5rem;
+      }
+      .summary {
+        background: #f5f5f5;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border-radius: 4px;
+        font-weight: bold;
+      }
+      .summary .balance {
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid #ddd;
+      }
+    </style>
+  </head>
+  <body>
+    <section id="register">
+      <h2>Регистрация</h2>
+      <label>Логин <input id="reg-login" /></label>
+      <label>Пароль <input id="reg-password" type="password" /></label>
+      <label>Имя <input id="reg-name" /></label>
+      <button onclick="register()">Создать пользователя</button>
+      <div id="reg-status" class="status"></div>
+    </section>
+
+    <section id="auth">
+      <h2>Авторизация</h2>
+      <label>Логин <input id="auth-login" /></label>
+      <label>Пароль <input id="auth-password" type="password" /></label>
+      <button onclick="login()">Получить токен</button>
+      <div id="auth-status" class="status"></div>
+    </section>
+
+    <section id="categories">
+      <h2>Категории</h2>
+      <button onclick="loadCategories()">Обновить</button>
+      <ul id="categories-list"></ul>
+    </section>
+
+    <section id="new-category">
+      <h2>Новая категория</h2>
+      <label>Название <input id="cat-name" /></label>
+      <label>
+        Тип
+        <select id="cat-kind">
+          <option value="income">Доход</option>
+          <option value="expense">Расход</option>
+        </select>
+      </label>
+      <button onclick="createCategory()">Создать категорию</button>
+      <div id="cat-status" class="status"></div>
+    </section>
+
+    <section id="transactions">
+      <h2>Операции</h2>
+      <button onclick="loadTransactions()">Обновить</button>
+      <div id="tx-summary" class="summary"></div>
+      <ul id="tx-list"></ul>
+    </section>
+
+    <section id="new-transaction">
+      <h2>Новая операция</h2>
+      <label>Сумма <input id="tx-amount" type="number" min="0" step="0.01" /></label>
+      <label>Категория <select id="tx-category"></select></label>
+      <label>Дата/время <input id="tx-date" type="datetime-local" /></label>
+      <label>Описание <textarea id="tx-description"></textarea></label>
+      <button onclick="createTransaction()">Сохранить</button>
+      <div id="tx-status" class="status"></div>
+    </section>
+
+    <script>
+      const API_URL = "";
+      let token = "";
+      let categories = [];
+
+      const formData = (obj) =>
+        Object.entries(obj)
+          .map(
+            ([key, value]) =>
+              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
+          )
+          .join("&");
+
+      const setStatus = (id, message) => {
+        document.getElementById(id).textContent = message;
+      };
+
+      async function handleError(res, defaultMessage = "Ошибка") {
+        if (res.status === 404) {
+          const errorData = await res.json().catch(() => ({ detail: "Ресурс не найден" }));
+          return `Ресурс не найден: ${errorData.detail || "Запрашиваемый объект не существует"}`;
+        }
+        if (res.status === 401) {
+          return "Требуется авторизация. Пожалуйста, войдите в систему.";
+        }
+        if (res.status === 422) {
+          const errorData = await res.json().catch(() => ({ detail: "Ошибка валидации" }));
+          return `Ошибка валидации: ${errorData.detail || "Проверьте правильность введенных данных"}`;
+        }
+        const errorText = await res.text();
+        try {
+          const errorData = JSON.parse(errorText);
+          return errorData.detail || defaultMessage;
+        } catch {
+          return errorText || defaultMessage;
+        }
+      }
+
+      async function register() {
+        setStatus("reg-status", "Отправляем...");
+        try {
+          const res = await fetch(`${API_URL}/auth/register`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              login: document.getElementById("reg-login").value,
+              password: document.getElementById("reg-password").value,
+              full_name: document.getElementById("reg-name").value || null,
+            }),
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка регистрации");
+            setStatus("reg-status", errorMsg);
+            return;
+          }
+          const user = await res.json();
+          setStatus("reg-status", `Создан пользователь #${user.id}`);
+        } catch (err) {
+          setStatus("reg-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      async function login() {
+        setStatus("auth-status", "Авторизация...");
+        try {
+          const res = await fetch(`${API_URL}/auth/token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: formData({
+              username: document.getElementById("auth-login").value,
+              password: document.getElementById("auth-password").value,
+            }),
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка авторизации");
+            setStatus("auth-status", errorMsg);
+            return;
+          }
+          const data = await res.json();
+          token = data.access_token;
+          setStatus("auth-status", "Токен сохранён.");
+          await loadCategories();
+          await loadTransactions();
+        } catch (err) {
+          setStatus("auth-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      function authHeaders() {
+        if (!token) throw new Error("Сначала выполните вход");
+        return {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        };
+      }
+
+      async function loadCategories() {
+        if (!token) return setStatus("cat-status", "Сначала получите токен");
+        try {
+          const res = await fetch(`${API_URL}/categories`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка загрузки категорий");
+            setStatus("cat-status", errorMsg);
+            return;
+          }
+          categories = await res.json();
+          renderCategories();
+          fillCategorySelect();
+          setStatus("cat-status", "");
+        } catch (err) {
+          setStatus("cat-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      function renderCategories() {
+        const list = document.getElementById("categories-list");
+        list.innerHTML = "";
+        if (!categories.length) {
+          list.innerHTML = "<li>Категорий нет</li>";
+          return;
+        }
+        categories.forEach((cat) => {
+          const li = document.createElement("li");
+          li.innerHTML = `
+            ${cat.name} (${cat.kind})
+            <span class="actions">
+              <button onclick="deleteCategory(${cat.id})">Удалить</button>
+            </span>
+          `;
+          list.appendChild(li);
+        });
+      }
+
+      function fillCategorySelect() {
+        const select = document.getElementById("tx-category");
+        select.innerHTML = "";
+        categories.forEach((cat) => {
+          const option = document.createElement("option");
+          option.value = cat.id;
+          option.textContent = `${cat.name} (${cat.kind})`;
+          select.appendChild(option);
+        });
+      }
+
+      async function createCategory() {
+        setStatus("cat-status", "Создаем категорию...");
+        try {
+          const payload = {
+            name: document.getElementById("cat-name").value,
+            kind: document.getElementById("cat-kind").value,
+          };
+          const res = await fetch(`${API_URL}/categories`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка создания категории");
+            setStatus("cat-status", errorMsg);
+            return;
+          }
+          document.getElementById("cat-name").value = "";
+          await loadCategories();
+        } catch (err) {
+          setStatus("cat-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      async function loadTransactions() {
+        if (!token) return setStatus("tx-status", "Сначала получите токен");
+        try {
+          const res = await fetch(`${API_URL}/transactions`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка загрузки операций");
+            setStatus("tx-status", errorMsg);
+            return;
+          }
+          const txs = await res.json();
+          renderTransactions(txs);
+          await loadSummary();
+        } catch (err) {
+          setStatus("tx-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      async function loadSummary() {
+        if (!token) {
+          const summaryDiv = document.getElementById("tx-summary");
+          if (summaryDiv) summaryDiv.innerHTML = "";
+          return;
+        }
+        try {
+          const res = await fetch(`${API_URL}/transactions/summary`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка загрузки сводки");
+            const summaryDiv = document.getElementById("tx-summary");
+            if (summaryDiv) {
+              summaryDiv.innerHTML = `<div style="color: #999;">${errorMsg}</div>`;
+            }
+            return;
+          }
+          const summary = await res.json();
+          renderSummary(summary);
+        } catch (err) {
+          console.error("Ошибка загрузки сводки:", err);
+          const summaryDiv = document.getElementById("tx-summary");
+          if (summaryDiv) {
+            summaryDiv.innerHTML = `<div style="color: #999;">Сводка недоступна: ${err.message || err}</div>`;
+          }
+        }
+      }
+
+      function renderSummary(summary) {
+        const summaryDiv = document.getElementById("tx-summary");
+        if (!summaryDiv) {
+          console.error("Элемент tx-summary не найден");
+          return;
+        }
+        if (!summary) {
+          summaryDiv.innerHTML = "";
+          return;
+        }
+        const income = parseFloat(summary.income_total) || 0;
+        const expense = parseFloat(summary.expense_total) || 0;
+        const balance = income - expense;
+        
+        summaryDiv.innerHTML = `
+          <div>Доходы: +${income.toFixed(2)}</div>
+          <div>Расходы: -${expense.toFixed(2)}</div>
+          <div class="balance">Баланс: ${balance >= 0 ? '+' : ''}${balance.toFixed(2)}</div>
+        `;
+      }
+
+      function renderTransactions(txs) {
+        const list = document.getElementById("tx-list");
+        list.innerHTML = "";
+        if (!txs.length) {
+          list.innerHTML = "<li>Нет операций</li>";
+          return;
+        }
+        txs.forEach((tx) => {
+          const category = categories.find((c) => c.id === tx.category_id);
+          const li = document.createElement("li");
+          const sign = category && category.kind === "income" ? "+" : "-";
+          li.innerHTML = `
+            ${sign}${tx.amount} — ${category ? category.name : "категория?"} (${
+            tx.description ?? "без описания"
+          })
+            <span class="actions">
+              <button onclick="deleteTransaction(${tx.id})">Удалить</button>
+            </span>
+          `;
+          list.appendChild(li);
+        });
+      }
+
+      async function createTransaction() {
+        setStatus("tx-status", "Сохраняем...");
+        try {
+          const payload = {
+            amount: document.getElementById("tx-amount").value,
+            category_id: Number(document.getElementById("tx-category").value),
+            occurred_at: document.getElementById("tx-date").value
+              ? new Date(document.getElementById("tx-date").value).toISOString()
+              : new Date().toISOString(),
+            description: document.getElementById("tx-description").value,
+          };
+          const res = await fetch(`${API_URL}/transactions`, {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка создания операции");
+            setStatus("tx-status", errorMsg);
+            return;
+          }
+          document.getElementById("tx-amount").value = "";
+          document.getElementById("tx-description").value = "";
+          document.getElementById("tx-date").value = "";
+          setStatus("tx-status", "Операция сохранена.");
+          await loadTransactions();
+          await loadSummary();
+        } catch (err) {
+          setStatus("tx-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      async function deleteCategory(id) {
+        if (!confirm("Удалить категорию? Операции в ней тоже удалятся.")) return;
+        try {
+          const res = await fetch(`${API_URL}/categories/${id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка удаления категории");
+            setStatus("cat-status", errorMsg);
+            return;
+          }
+          await loadCategories();
+          await loadTransactions();
+          await loadSummary();
+        } catch (err) {
+          setStatus("cat-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+
+      async function deleteTransaction(id) {
+        if (!confirm("Удалить операцию?")) return;
+        try {
+          const res = await fetch(`${API_URL}/transactions/${id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) {
+            const errorMsg = await handleError(res, "Ошибка удаления операции");
+            setStatus("tx-status", errorMsg);
+            return;
+          }
+          await loadTransactions();
+          await loadSummary();
+        } catch (err) {
+          setStatus("tx-status", `Ошибка: ${err.message || err}`);
+        }
+      }
+    </script>
+  </body>
+</html>
+
